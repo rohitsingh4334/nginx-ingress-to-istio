@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NGINX to Istio Migration Report</title>
+  <style>
+    :root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3a;--text:#e2e8f0;--muted:#8892a4;--accent:#4f8ef7;--low:#22c55e;--med:#f59e0b;--high:#ef4444}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif}
+    header{padding:1.2rem 2rem;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+    header h1{font-size:1.2rem}
+    .toolbar{padding:.8rem 2rem;display:flex;gap:.6rem;align-items:center;border-bottom:1px solid var(--border)}
+    .btn{padding:.4rem 1rem;border-radius:6px;border:none;cursor:pointer;font-size:.8rem;font-weight:600}
+    .btn-primary{background:var(--accent);color:#fff}
+    .btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)}
+    .btn:hover{opacity:.85}
+    .summary-cards{display:flex;gap:1rem;padding:1.2rem 2rem}
+    .card{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1rem;text-align:center}
+    .card .num{font-size:2rem;font-weight:700}
+    .card .lbl{font-size:.75rem;color:var(--muted);margin-top:.2rem}
+    .card.low .num{color:var(--low)}.card.med .num{color:var(--med)}.card.high .num{color:var(--high)}
+    main{padding:0 2rem 2rem}
+    .ingress-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;margin-bottom:1rem;overflow:hidden}
+    .ingress-header{padding:.9rem 1.2rem;display:flex;align-items:center;gap:.8rem;cursor:pointer;user-select:none}
+    .ingress-header:hover{background:rgba(255,255,255,.03)}
+    .badge{padding:.2rem .6rem;border-radius:999px;font-size:.7rem;font-weight:700}
+    .badge-Low{background:#14532d;color:var(--low)}.badge-Medium{background:#451a03;color:var(--med)}.badge-High{background:#450a0a;color:var(--high)}
+    .ingress-name{font-weight:600}.ingress-ns{font-size:.75rem;color:var(--muted)}
+    .chevron{margin-left:auto;transition:transform .2s}.chevron.open{transform:rotate(90deg)}
+    .ingress-body{display:none;padding:1rem 1.2rem;border-top:1px solid var(--border)}
+    .ingress-body.open{display:block}
+    .tabs{display:flex;gap:.4rem;margin-bottom:1rem}
+    .tab{padding:.35rem .9rem;border-radius:6px;font-size:.78rem;cursor:pointer;border:1px solid var(--border);color:var(--muted)}
+    .tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+    .tab-content{display:none}.tab-content.active{display:block}
+    pre{background:#0a0c12;border:1px solid var(--border);border-radius:8px;padding:.8rem;font-size:.72rem;overflow:auto;color:#a8d8a8;white-space:pre}
+    .copy-btn{float:right;margin-bottom:.3rem}
+    table{width:100%;border-collapse:collapse;font-size:.78rem}
+    th{background:#12151f;padding:.5rem .8rem;text-align:left;color:var(--muted);font-weight:600;border-bottom:1px solid var(--border)}
+    td{padding:.45rem .8rem;border-bottom:1px solid var(--border);vertical-align:top}
+    tr:last-child td{border-bottom:none}
+    .warn{color:var(--high);font-size:.72rem;margin:.2rem 0}
+    .chip{display:inline-block;background:#1e2130;border:1px solid var(--border);border-radius:4px;padding:.1rem .4rem;font-size:.68rem;margin:.1rem}
+    .empty{text-align:center;padding:3rem;color:var(--muted)}
+  </style>
+</head>
+<body>
+<header>
+  <h1>🔄 NGINX Ingress → Istio Migration Report</h1>
+  <span id="ts"></span>
+</header>
+<div class="toolbar">
+  <button class="btn btn-primary" onclick="downloadExcel()">⬇ Download Excel</button>
+  <button class="btn btn-outline" onclick="downloadPDF()">⬇ Download PDF</button>
+  <button class="btn btn-outline" onclick="loadReport()">↺ Refresh</button>
+</div>
+<div class="summary-cards">
+  <div class="card"><div class="num" id="s-total">—</div><div class="lbl">Total Ingresses</div></div>
+  <div class="card low"><div class="num" id="s-low">—</div><div class="lbl">Low Complexity</div></div>
+  <div class="card med"><div class="num" id="s-med">—</div><div class="lbl">Medium Complexity</div></div>
+  <div class="card high"><div class="num" id="s-high">—</div><div class="lbl">High Complexity</div></div>
+</div>
+<main id="main"><div class="empty">Loading report…</div></main>
+<script>
+document.getElementById('ts').textContent=new Date().toLocaleString();
+async function loadReport(){
+  const main=document.getElementById('main');
+  try{
+    const res=await fetch('/api/report');
+    const data=await res.json();
+    renderReport(data);
+  }catch(e){main.innerHTML='<div class="empty">Failed to load report.</div>';}
+}
+function renderReport(data){
+  const{ingresses,summary}=data;
+  document.getElementById('s-total').textContent=summary.total;
+  document.getElementById('s-low').textContent=summary.low;
+  document.getElementById('s-med').textContent=summary.medium;
+  document.getElementById('s-high').textContent=summary.high;
+  const main=document.getElementById('main');
+  if(!ingresses||!ingresses.length){main.innerHTML='<div class="empty">No matching Ingress resources found.</div>';return;}
+  main.innerHTML=ingresses.map((item,idx)=>{
+    const a=item.analysis,is=item.istio;
+    const hosts=(a.Hosts||[]).map(h=>`<span class="chip">${h}</span>`).join('');
+    const warnings=(a.Warnings||[]).map(w=>`<div class="warn">⚠ ${w}</div>`).join('');
+    const annRows=(a.Annotations||[]).map(n=>`<tr><td><code>${n.Annotation}</code></td><td>${esc(n.Value)}</td><td>${esc(n.IstioEquiv)}</td><td>${esc(n.ManualAction)}</td></tr>`).join('');
+    const ruleRows=(a.Rules||[]).flatMap(r=>(r.Paths||[]).map(p=>`<tr><td>${esc(r.Host||'*')}</td><td>${esc(p.Path)}</td><td>${esc(p.PathType)}</td><td>${esc(p.BackendSvc)}</td><td>${esc(p.BackendPort)}</td></tr>`)).join('');
+    return`<div class="ingress-card">
+      <div class="ingress-header" onclick="toggle(${idx})">
+        <span class="badge badge-${a.Complexity}">${a.Complexity}</span>
+        <div><div class="ingress-name">${esc(a.Name)}</div><div class="ingress-ns">${esc(a.Namespace)}</div></div>
+        <div style="margin-left:.5rem">${hosts}</div>
+        ${a.TLSEnabled?'<span class="chip">🔒 TLS</span>':''}
+        <span class="chevron" id="chev-${idx}">▶</span>
+      </div>
+      <div class="ingress-body" id="body-${idx}">
+        ${warnings}
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab(${idx},'rules',this)">Rules</div>
+          <div class="tab" onclick="switchTab(${idx},'annotations',this)">Annotations (${(a.Annotations||[]).length})</div>
+          <div class="tab" onclick="switchTab(${idx},'gateway',this)">Gateway YAML</div>
+          <div class="tab" onclick="switchTab(${idx},'vs',this)">VirtualService YAML</div>
+          <div class="tab" onclick="switchTab(${idx},'dr',this)">DestinationRule YAML</div>
+        </div>
+        <div class="tab-content active" id="tab-${idx}-rules">
+          <table><thead><tr><th>Host</th><th>Path</th><th>PathType</th><th>Service</th><th>Port</th></tr></thead>
+          <tbody>${ruleRows||'<tr><td colspan="5" style="color:var(--muted)">No rules</td></tr>'}</tbody></table>
+        </div>
+        <div class="tab-content" id="tab-${idx}-annotations">
+          <table><thead><tr><th>Annotation</th><th>Value</th><th>Istio Equivalent</th><th>Action Required</th></tr></thead>
+          <tbody>${annRows||'<tr><td colspan="4" style="color:var(--muted)">No NGINX annotations detected</td></tr>'}</tbody></table>
+        </div>
+        <div class="tab-content" id="tab-${idx}-gateway">
+          <button class="btn btn-outline copy-btn" onclick="copy('gw-${idx}')">Copy</button>
+          <pre id="gw-${idx}">${esc(is.Gateway)}</pre>
+        </div>
+        <div class="tab-content" id="tab-${idx}-vs">
+          <button class="btn btn-outline copy-btn" onclick="copy('vs-${idx}')">Copy</button>
+          <pre id="vs-${idx}">${esc(is.VirtualService)}</pre>
+        </div>
+        <div class="tab-content" id="tab-${idx}-dr">
+          <button class="btn btn-outline copy-btn" onclick="copy('dr-${idx}')">Copy</button>
+          <pre id="dr-${idx}">${esc(is.DestinationRule)}</pre>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function toggle(idx){document.getElementById(`body-${idx}`).classList.toggle('open');document.getElementById(`chev-${idx}`).classList.toggle('open');}
+function switchTab(idx,name,el){const body=document.getElementById(`body-${idx}`);body.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));body.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.getElementById(`tab-${idx}-${name}`).classList.add('active');el.classList.add('active');}
+function copy(id){navigator.clipboard.writeText(document.getElementById(id).textContent);}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function downloadExcel(){window.location.href='/api/export/excel';}
+function downloadPDF(){window.location.href='/api/export/pdf';}
+loadReport();
+</script>
+</body>
+</html>
