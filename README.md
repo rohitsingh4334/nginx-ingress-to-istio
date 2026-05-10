@@ -63,16 +63,39 @@ flowchart TD
 
 ## Installation
 
-**One-liner (Linux / macOS):**
+**One-liner — always installs the latest release (Linux / macOS):**
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/rohitsingh4334/nginx-ingress-to-istio/main/install.sh | bash
 ```
 
-Install a specific version:
+**Install a specific version:**
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/rohitsingh4334/nginx-ingress-to-istio/main/install.sh | bash -s -- --version v0.1.0
+curl -sSfL https://raw.githubusercontent.com/rohitsingh4334/nginx-ingress-to-istio/main/install.sh | bash -s -- --version v0.1.3
+```
+
+Replace `v0.1.3` with any tag from the [Releases page](https://github.com/rohitsingh4334/nginx-ingress-to-istio/releases).
+
+**Custom install directory** (default is `/usr/local/bin`):
+
+```bash
+INSTALL_DIR=~/.local/bin curl -sSfL https://raw.githubusercontent.com/rohitsingh4334/nginx-ingress-to-istio/main/install.sh | bash
+```
+
+**Direct binary download** (no script):
+
+| Platform | Architecture | URL |
+| --- | --- | --- |
+| Linux | amd64 | `https://github.com/rohitsingh4334/nginx-ingress-to-istio/releases/download/<version>/ingress-nginx-migration-linux-amd64` |
+| Linux | arm64 | `https://github.com/rohitsingh4334/nginx-ingress-to-istio/releases/download/<version>/ingress-nginx-migration-linux-arm64` |
+| macOS | amd64 | `https://github.com/rohitsingh4334/nginx-ingress-to-istio/releases/download/<version>/ingress-nginx-migration-darwin-amd64` |
+| macOS | arm64 (Apple Silicon) | `https://github.com/rohitsingh4334/nginx-ingress-to-istio/releases/download/<version>/ingress-nginx-migration-darwin-arm64` |
+
+```bash
+# Example — Linux amd64, version v0.1.3
+curl -sSfL https://github.com/rohitsingh4334/nginx-ingress-to-istio/releases/download/v0.1.3/ingress-nginx-migration-linux-amd64 \
+  -o ingress-nginx-migration && chmod +x ingress-nginx-migration
 ```
 
 **From source:**
