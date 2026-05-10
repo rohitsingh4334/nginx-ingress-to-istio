@@ -20,49 +20,69 @@ import (
 	"github.com/rohitsingh4334/nginx-ingress-to-istio/web"
 )
 
+// resultCache holds the last successful fetch with a TTL.
+// TTL of 0 disables caching entirely.
+type resultCache struct {
+	mu       sync.RWMutex
+	results  []analyzer.IngressResult
+	cachedAt time.Time
+	ttl      time.Duration
+}
+
+func (c *resultCache) get() ([]analyzer.IngressResult, bool) {
+	if c.ttl == 0 {
+		return nil, false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.results == nil || time.Since(c.cachedAt) > c.ttl {
+		return nil, false
+	}
+	cp := make([]analyzer.IngressResult, len(c.results))
+	copy(cp, c.results)
+	return cp, true
+}
+
+func (c *resultCache) set(results []analyzer.IngressResult) {
+	if c.ttl == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.results = results
+	c.cachedAt = time.Now()
+}
+
+func (c *resultCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.results = nil
+}
+
 // ── Server ───────────────────────────────────────────────────────────────────
 
 type Server struct {
-	addr      string
-	cfg       k8s.Config
-	istioCfg  istio.Config
-	mu        sync.Mutex
-	client    *k8s.Client
-	activeCtx string // kubeconfig current-context when client was last built
-	ready     chan struct{} // closed once the server is accepting connections
+	addr     string
+	cfg      k8s.Config
+	istioCfg istio.Config
+	client   *k8s.Client
+	cache    resultCache
+	ready    chan struct{} // closed once the server is accepting connections
 }
 
-func NewServer(addr string, cfg k8s.Config, istioCfg istio.Config) *Server {
+func NewServer(addr string, cfg k8s.Config, istioCfg istio.Config, cacheTTL time.Duration) (*Server, error) {
+	client, err := k8s.NewClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating k8s client: %w", err)
+	}
 	return &Server{
 		addr:     addr,
 		cfg:      cfg,
 		istioCfg: istioCfg,
+		client:   client,
+		cache:    resultCache{ttl: cacheTTL},
 		ready:    make(chan struct{}),
-	}
-}
-
-// getClient returns the current k8s client, rebuilding it when the kubeconfig
-// current-context has changed since the last call.
-func (s *Server) getClient() (*k8s.Client, error) {
-	info, err := k8s.GetClusterInfo(s.cfg.Kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("reading kubeconfig: %w", err)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.client != nil && s.activeCtx == info.Context {
-		return s.client, nil
-	}
-	client, err := k8s.NewClient(s.cfg)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to cluster %q: %w", info.Context, err)
-	}
-	if s.activeCtx != "" {
-		log.Printf("INFO kubeconfig context changed %q → %q, reconnected", s.activeCtx, info.Context)
-	}
-	s.client = client
-	s.activeCtx = info.Context
-	return s.client, nil
+	}, nil
 }
 
 func (s *Server) Serve() error {
@@ -160,15 +180,16 @@ type Summary struct {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 func (s *Server) fetchResults(ctx context.Context) ([]analyzer.IngressResult, error) {
-	client, err := s.getClient()
+	if cached, ok := s.cache.get(); ok {
+		return cached, nil
+	}
+	ingresses, err := s.client.ListIngresses(ctx)
 	if err != nil {
 		return nil, err
 	}
-	ingresses, err := client.ListIngresses(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return analyzer.Analyze(ingresses), nil
+	results := analyzer.Analyze(ingresses)
+	s.cache.set(results)
+	return results, nil
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +202,11 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	// Allow the UI Refresh button to bypass the cache via ?refresh=1.
+	if r.URL.Query().Get("refresh") == "1" {
+		s.cache.invalidate()
+	}
+
 	results, err := s.fetchResults(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

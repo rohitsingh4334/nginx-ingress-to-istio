@@ -90,6 +90,12 @@ func main() {
 				Usage:   "TLS mode for generated Gateway TLS block (SIMPLE, MUTUAL, PASSTHROUGH, AUTO_PASSTHROUGH, ISTIO_MUTUAL).",
 				EnvVars: []string{"TLS_MODE"},
 			},
+			&cli.StringFlag{
+				Name:    "cache-ttl",
+				Value:   "15s",
+				Usage:   "How long to cache the Ingress analysis results (0 disables caching).",
+				EnvVars: []string{"CACHE_TTL"},
+			},
 		},
 		Commands: []*cli.Command{
 			{
@@ -114,6 +120,10 @@ func main() {
 			if !validTLSModes[c.String("tls-mode")] {
 				return fmt.Errorf("invalid --tls-mode %q: must be one of SIMPLE, MUTUAL, PASSTHROUGH, AUTO_PASSTHROUGH, ISTIO_MUTUAL", c.String("tls-mode"))
 			}
+			cacheTTL, err := time.ParseDuration(c.String("cache-ttl"))
+			if err != nil {
+				return fmt.Errorf("invalid --cache-ttl %q: must be a valid duration (e.g. 15s, 1m)", c.String("cache-ttl"))
+			}
 
 			cfg := k8s.Config{
 				Kubeconfig:               c.String("kubeconfig"),
@@ -129,7 +139,10 @@ func main() {
 				TLSMode:        c.String("tls-mode"),
 			}
 
-			srv := report.NewServer(c.String("addr"), cfg, istioCfg)
+			srv, err := report.NewServer(c.String("addr"), cfg, istioCfg, cacheTTL)
+			if err != nil {
+				return fmt.Errorf("initialising server: %w", err)
+			}
 			log.Printf("Serving migration report at http://%s\n", c.String("addr"))
 			return srv.Serve()
 		},

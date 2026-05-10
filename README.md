@@ -6,19 +6,17 @@ A CLI tool that connects to a Kubernetes cluster, analyzes NGINX Ingress resourc
 
 ```mermaid
 flowchart TD
-    CLI["CLI\ncmd/ingress-nginx-migration"] -->|"flags: --addr --kubeconfig\n--namespaces ..."| Server
+    CLI["CLI\ncmd/ingress-nginx-migration"] -->|"flags: --addr --kubeconfig\n--namespaces --cache-ttl ..."| Server
 
     subgraph Server["HTTP Server  internal/report"]
         Mux["Router\n/  /api/*  /healthz  /readyz"]
+        Cache["Result Cache\nsync.RWMutex · TTL"]
         MW["Middleware\nrequest-ID · access log · recovery"]
-        CtxCheck["Context watcher\nreads kubeconfig on each request\nrebuilds client only on context change"]
-        Mux --> MW --> CtxCheck
+        Mux --> MW --> Cache
     end
 
-    Kubeconfig["~/.kube/config\ncurrent-context"] -->|"read on every request\n(cheap file parse)"| CtxCheck
-
     subgraph K8s["Kubernetes  internal/k8s"]
-        Client["client-go\n(rebuilt on context change)"]
+        Client["client-go"]
         KubeAPI["Kubernetes API\nIngresses · IngressClasses"]
         Client <-->|list| KubeAPI
     end
@@ -35,12 +33,12 @@ flowchart TD
         Manifests["/api/export/manifests\n.tar.gz + kustomization.yaml"]
     end
 
-    CtxCheck -->|"context unchanged → reuse\ncontext changed → reconnect"| Client
+    Cache -->|cache miss| Client
     Client -->|"[]networkingv1.Ingress"| Analyzer
-    IstioGen -->|results + YAML| Server
+    IstioGen -->|results + YAML| Cache
     Server --> Exports
 
-    Browser["Browser"] -->|GET /api/report| Mux
+    Browser["Browser"] -->|"GET /api/report\n?refresh=1 bypasses cache"| Mux
     Browser -->|GET /| StaticUI["Web UI\nweb/index.html\nembedded via go:embed"]
     Browser -->|download| Exports
 
@@ -55,7 +53,7 @@ flowchart TD
 - Generates **Gateway**, **VirtualService**, and **DestinationRule** YAML stubs
 - Serves an interactive web UI with search, filter, sort, and per-ingress YAML preview
 - Exports the report as **Excel**, **PDF**, or a **`.tar.gz` manifest bundle** (kustomization-ready)
-- **Live context switching** — detects `kubectl config use-context` changes and reconnects automatically; no server restart needed
+- In-process result cache with configurable TTL (`--cache-ttl`)
 - Health (`/healthz`) and readiness (`/readyz`) probes for Kubernetes deployments
 - Request-ID stamping and access logging on all API endpoints
 
@@ -112,6 +110,7 @@ ingress-nginx-migration \
 | `--connect-timeout` | `10s` | `CONNECT_TIMEOUT` | TCP connect timeout in DestinationRule |
 | `--load-balancer` | `ROUND_ROBIN` | `LOAD_BALANCER` | Load balancer algorithm (`ROUND_ROBIN`, `LEAST_CONN`, `RANDOM`, `PASSTHROUGH`) |
 | `--tls-mode` | `SIMPLE` | `TLS_MODE` | TLS mode for Gateway (`SIMPLE`, `MUTUAL`, `PASSTHROUGH`, `AUTO_PASSTHROUGH`, `ISTIO_MUTUAL`) |
+| `--cache-ttl` | `15s` | `CACHE_TTL` | How long to cache analysis results (`0` disables caching) |
 
 ## Web UI
 
@@ -124,7 +123,7 @@ Open `http://localhost:8080` after starting the tool.
 - **Copy buttons** — copy individual YAML tabs, or **Copy All YAML** to get all three documents concatenated with `---` separators
 - **Download Excel / PDF** — full report in spreadsheet or document form
 - **Download Manifests** — `.tar.gz` archive (layout below); apply with `kubectl apply -k .` after extracting
-- **Refresh** — re-fetches live data from the cluster; if you switched context with `kubectl config use-context`, the next refresh automatically reconnects to the new cluster
+- **Refresh** — re-fetches from the cluster, bypassing the server-side cache
 - **Light / dark theme** — persisted in `localStorage`
 
 ```text
@@ -138,7 +137,7 @@ kustomization.yaml
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/report` | JSON analysis report |
+| `GET` | `/api/report` | JSON analysis report (`?refresh=1` bypasses cache) |
 | `GET` | `/api/cluster-info` | Current kubeconfig context, cluster name, and server URL |
 | `GET` | `/api/export/excel` | Excel workbook download |
 | `GET` | `/api/export/pdf` | PDF report download |
