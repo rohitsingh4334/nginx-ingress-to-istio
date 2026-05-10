@@ -62,12 +62,14 @@ func (c *resultCache) invalidate() {
 // ── Server ───────────────────────────────────────────────────────────────────
 
 type Server struct {
-	addr     string
-	cfg      k8s.Config
-	istioCfg istio.Config
-	client   *k8s.Client
-	cache    resultCache
-	ready    chan struct{} // closed once the server is accepting connections
+	addr      string
+	cfg       k8s.Config
+	istioCfg  istio.Config
+	mu        sync.Mutex
+	client    *k8s.Client
+	activeCtx string // kubeconfig current-context when client was last built
+	cache     resultCache
+	ready     chan struct{} // closed once the server is accepting connections
 }
 
 func NewServer(addr string, cfg k8s.Config, istioCfg istio.Config, cacheTTL time.Duration) (*Server, error) {
@@ -75,14 +77,43 @@ func NewServer(addr string, cfg k8s.Config, istioCfg istio.Config, cacheTTL time
 	if err != nil {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
+	info, err := k8s.GetClusterInfo(cfg.Kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("reading kubeconfig: %w", err)
+	}
 	return &Server{
-		addr:     addr,
-		cfg:      cfg,
-		istioCfg: istioCfg,
-		client:   client,
-		cache:    resultCache{ttl: cacheTTL},
-		ready:    make(chan struct{}),
+		addr:      addr,
+		cfg:       cfg,
+		istioCfg:  istioCfg,
+		client:    client,
+		activeCtx: info.Context,
+		cache:     resultCache{ttl: cacheTTL},
+		ready:     make(chan struct{}),
 	}, nil
+}
+
+// syncClient checks whether the kubeconfig current-context has changed since
+// the last call. If it has, the k8s client is rebuilt and the cache is
+// invalidated so the next fetch hits the new cluster.
+func (s *Server) syncClient() (*k8s.Client, error) {
+	info, err := k8s.GetClusterInfo(s.cfg.Kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("reading kubeconfig: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeCtx == info.Context {
+		return s.client, nil
+	}
+	client, err := k8s.NewClient(s.cfg)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to cluster %q: %w", info.Context, err)
+	}
+	log.Printf("INFO kubeconfig context changed %q → %q, reconnecting", s.activeCtx, info.Context)
+	s.client = client
+	s.activeCtx = info.Context
+	s.cache.invalidate()
+	return s.client, nil
 }
 
 func (s *Server) Serve() error {
@@ -180,10 +211,14 @@ type Summary struct {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 func (s *Server) fetchResults(ctx context.Context) ([]analyzer.IngressResult, error) {
+	client, err := s.syncClient()
+	if err != nil {
+		return nil, err
+	}
 	if cached, ok := s.cache.get(); ok {
 		return cached, nil
 	}
-	ingresses, err := s.client.ListIngresses(ctx)
+	ingresses, err := client.ListIngresses(ctx)
 	if err != nil {
 		return nil, err
 	}

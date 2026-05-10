@@ -14,6 +14,14 @@ import (
 	"github.com/rohitsingh4334/nginx-ingress-to-istio/internal/istio"
 )
 
+// xlsxLog logs an Excel API error if non-nil. Used for calls whose errors are
+// non-recoverable at this point (headers not yet sent) but shouldn't abort the export.
+func xlsxLog(err error, op string) {
+	if err != nil {
+		log.Printf("excel %s: %v", op, err)
+	}
+}
+
 // handleExportExcel streams an Excel workbook to the client.
 func (s *Server) handleExportExcel(w http.ResponseWriter, r *http.Request) {
 	results, err := s.fetchResults(r.Context())
@@ -26,12 +34,12 @@ func (s *Server) handleExportExcel(w http.ResponseWriter, r *http.Request) {
 
 	// ── Sheet 1: Summary ────────────────────────────────────────────────
 	sum := f.GetSheetName(0)
-	f.SetSheetName(sum, "Summary")
+	xlsxLog(f.SetSheetName(sum, "Summary"), "SetSheetName")
 
 	headers := []string{"Name", "Namespace", "Complexity", "Hosts", "TLS", "Warnings"}
 	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue("Summary", cell, h)
+		xlsxLog(f.SetCellValue("Summary", cell, h), "SetCellValue")
 	}
 
 	styleHeader, err := f.NewStyle(&excelize.Style{
@@ -42,7 +50,7 @@ func (s *Server) handleExportExcel(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("excel header style error: %v", err)
 	}
-	f.SetCellStyle("Summary", "A1", "F1", styleHeader)
+	xlsxLog(f.SetCellStyle("Summary", "A1", "F1", styleHeader), "SetCellStyle")
 
 	complexityColors := map[analyzer.Complexity]string{
 		analyzer.Low:    "C6EFCE",
@@ -52,12 +60,12 @@ func (s *Server) handleExportExcel(w http.ResponseWriter, r *http.Request) {
 
 	for row, res := range results {
 		r := row + 2
-		f.SetCellValue("Summary", fmt.Sprintf("A%d", r), res.Name)
-		f.SetCellValue("Summary", fmt.Sprintf("B%d", r), res.Namespace)
-		f.SetCellValue("Summary", fmt.Sprintf("C%d", r), string(res.Complexity))
-		f.SetCellValue("Summary", fmt.Sprintf("D%d", r), strings.Join(res.Hosts, ", "))
-		f.SetCellValue("Summary", fmt.Sprintf("E%d", r), res.TLSEnabled)
-		f.SetCellValue("Summary", fmt.Sprintf("F%d", r), strings.Join(res.Warnings, "; "))
+		xlsxLog(f.SetCellValue("Summary", fmt.Sprintf("A%d", r), res.Name), "SetCellValue")
+		xlsxLog(f.SetCellValue("Summary", fmt.Sprintf("B%d", r), res.Namespace), "SetCellValue")
+		xlsxLog(f.SetCellValue("Summary", fmt.Sprintf("C%d", r), string(res.Complexity)), "SetCellValue")
+		xlsxLog(f.SetCellValue("Summary", fmt.Sprintf("D%d", r), strings.Join(res.Hosts, ", ")), "SetCellValue")
+		xlsxLog(f.SetCellValue("Summary", fmt.Sprintf("E%d", r), res.TLSEnabled), "SetCellValue")
+		xlsxLog(f.SetCellValue("Summary", fmt.Sprintf("F%d", r), strings.Join(res.Warnings, "; ")), "SetCellValue")
 
 		if color, ok := complexityColors[res.Complexity]; ok {
 			style, err := f.NewStyle(&excelize.Style{
@@ -66,55 +74,57 @@ func (s *Server) handleExportExcel(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Printf("excel complexity style error: %v", err)
 			} else {
-				f.SetCellStyle("Summary", fmt.Sprintf("C%d", r), fmt.Sprintf("C%d", r), style)
+				xlsxLog(f.SetCellStyle("Summary", fmt.Sprintf("C%d", r), fmt.Sprintf("C%d", r), style), "SetCellStyle")
 			}
 		}
 	}
 
-	f.SetColWidth("Summary", "A", "F", 25)
+	xlsxLog(f.SetColWidth("Summary", "A", "F", 25), "SetColWidth")
 
 	// ── Sheet 2: Annotations ────────────────────────────────────────────
-	f.NewSheet("Annotations")
+	_, err = f.NewSheet("Annotations")
+	xlsxLog(err, "NewSheet")
 	annHeaders := []string{"Ingress", "Namespace", "Annotation", "Value", "Istio Equivalent", "Manual Action"}
 	for i, h := range annHeaders {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue("Annotations", cell, h)
+		xlsxLog(f.SetCellValue("Annotations", cell, h), "SetCellValue")
 	}
-	f.SetCellStyle("Annotations", "A1", "F1", styleHeader)
+	xlsxLog(f.SetCellStyle("Annotations", "A1", "F1", styleHeader), "SetCellStyle")
 
 	annRow := 2
 	for _, res := range results {
 		for _, ann := range res.Annotations {
-			f.SetCellValue("Annotations", fmt.Sprintf("A%d", annRow), res.Name)
-			f.SetCellValue("Annotations", fmt.Sprintf("B%d", annRow), res.Namespace)
-			f.SetCellValue("Annotations", fmt.Sprintf("C%d", annRow), ann.Annotation)
-			f.SetCellValue("Annotations", fmt.Sprintf("D%d", annRow), ann.Value)
-			f.SetCellValue("Annotations", fmt.Sprintf("E%d", annRow), ann.IstioEquiv)
-			f.SetCellValue("Annotations", fmt.Sprintf("F%d", annRow), ann.ManualAction)
+			xlsxLog(f.SetCellValue("Annotations", fmt.Sprintf("A%d", annRow), res.Name), "SetCellValue")
+			xlsxLog(f.SetCellValue("Annotations", fmt.Sprintf("B%d", annRow), res.Namespace), "SetCellValue")
+			xlsxLog(f.SetCellValue("Annotations", fmt.Sprintf("C%d", annRow), ann.Annotation), "SetCellValue")
+			xlsxLog(f.SetCellValue("Annotations", fmt.Sprintf("D%d", annRow), ann.Value), "SetCellValue")
+			xlsxLog(f.SetCellValue("Annotations", fmt.Sprintf("E%d", annRow), ann.IstioEquiv), "SetCellValue")
+			xlsxLog(f.SetCellValue("Annotations", fmt.Sprintf("F%d", annRow), ann.ManualAction), "SetCellValue")
 			annRow++
 		}
 	}
-	f.SetColWidth("Annotations", "A", "F", 30)
+	xlsxLog(f.SetColWidth("Annotations", "A", "F", 30), "SetColWidth")
 
 	// ── Sheet 3: Istio Resources ─────────────────────────────────────────
-	f.NewSheet("Istio Resources")
+	_, err = f.NewSheet("Istio Resources")
+	xlsxLog(err, "NewSheet")
 	istioHeaders := []string{"Ingress", "Namespace", "Gateway YAML", "VirtualService YAML", "DestinationRule YAML"}
 	for i, h := range istioHeaders {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue("Istio Resources", cell, h)
+		xlsxLog(f.SetCellValue("Istio Resources", cell, h), "SetCellValue")
 	}
-	f.SetCellStyle("Istio Resources", "A1", "E1", styleHeader)
+	xlsxLog(f.SetCellStyle("Istio Resources", "A1", "E1", styleHeader), "SetCellStyle")
 
 	for row, res := range results {
 		ir := istio.Generate(res, s.istioCfg)
 		r := row + 2
-		f.SetCellValue("Istio Resources", fmt.Sprintf("A%d", r), res.Name)
-		f.SetCellValue("Istio Resources", fmt.Sprintf("B%d", r), res.Namespace)
-		f.SetCellValue("Istio Resources", fmt.Sprintf("C%d", r), ir.Gateway)
-		f.SetCellValue("Istio Resources", fmt.Sprintf("D%d", r), ir.VirtualService)
-		f.SetCellValue("Istio Resources", fmt.Sprintf("E%d", r), ir.DestinationRule)
+		xlsxLog(f.SetCellValue("Istio Resources", fmt.Sprintf("A%d", r), res.Name), "SetCellValue")
+		xlsxLog(f.SetCellValue("Istio Resources", fmt.Sprintf("B%d", r), res.Namespace), "SetCellValue")
+		xlsxLog(f.SetCellValue("Istio Resources", fmt.Sprintf("C%d", r), ir.Gateway), "SetCellValue")
+		xlsxLog(f.SetCellValue("Istio Resources", fmt.Sprintf("D%d", r), ir.VirtualService), "SetCellValue")
+		xlsxLog(f.SetCellValue("Istio Resources", fmt.Sprintf("E%d", r), ir.DestinationRule), "SetCellValue")
 	}
-	f.SetColWidth("Istio Resources", "A", "E", 50)
+	xlsxLog(f.SetColWidth("Istio Resources", "A", "E", 50), "SetColWidth")
 
 	filename := fmt.Sprintf("ingress-migration-report-%s.xlsx", time.Now().Format("2006-01-02"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

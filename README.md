@@ -10,13 +10,16 @@ flowchart TD
 
     subgraph Server["HTTP Server  internal/report"]
         Mux["Router\n/  /api/*  /healthz  /readyz"]
-        Cache["Result Cache\nsync.RWMutex · TTL"]
         MW["Middleware\nrequest-ID · access log · recovery"]
-        Mux --> MW --> Cache
+        Sync["Context watcher\nreads kubeconfig on each request\nrebuilds client + clears cache on change"]
+        Cache["Result Cache\nsync.RWMutex · TTL"]
+        Mux --> MW --> Sync --> Cache
     end
 
+    Kubeconfig["~/.kube/config\ncurrent-context"] -->|"read on every request\n(cheap file parse)"| Sync
+
     subgraph K8s["Kubernetes  internal/k8s"]
-        Client["client-go"]
+        Client["client-go\n(rebuilt on context change)"]
         KubeAPI["Kubernetes API\nIngresses · IngressClasses"]
         Client <-->|list| KubeAPI
     end
@@ -33,7 +36,7 @@ flowchart TD
         Manifests["/api/export/manifests\n.tar.gz + kustomization.yaml"]
     end
 
-    Cache -->|cache miss| Client
+    Cache -->|"cache hit → return\ncache miss → fetch"| Client
     Client -->|"[]networkingv1.Ingress"| Analyzer
     IstioGen -->|results + YAML| Cache
     Server --> Exports
@@ -54,6 +57,7 @@ flowchart TD
 - Serves an interactive web UI with search, filter, sort, and per-ingress YAML preview
 - Exports the report as **Excel**, **PDF**, or a **`.tar.gz` manifest bundle** (kustomization-ready)
 - In-process result cache with configurable TTL (`--cache-ttl`)
+- **Live context switching** — detects `kubectl config use-context` changes, rebuilds the cluster connection, and clears the cache automatically; no server restart needed
 - Health (`/healthz`) and readiness (`/readyz`) probes for Kubernetes deployments
 - Request-ID stamping and access logging on all API endpoints
 
@@ -123,7 +127,7 @@ Open `http://localhost:8080` after starting the tool.
 - **Copy buttons** — copy individual YAML tabs, or **Copy All YAML** to get all three documents concatenated with `---` separators
 - **Download Excel / PDF** — full report in spreadsheet or document form
 - **Download Manifests** — `.tar.gz` archive (layout below); apply with `kubectl apply -k .` after extracting
-- **Refresh** — re-fetches from the cluster, bypassing the server-side cache
+- **Refresh** — bypasses the cache and re-fetches live from the cluster; switching context with `kubectl config use-context` is picked up automatically on the next request
 - **Light / dark theme** — persisted in `localStorage`
 
 ```text
