@@ -2,6 +2,8 @@ package analyzer
 
 import (
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -59,11 +61,15 @@ func analyzeOne(ing networkingv1.Ingress) IngressResult {
 	for _, tls := range ing.Spec.TLS {
 		r.TLSEnabled = true
 		r.TLSSecrets = append(r.TLSSecrets, tls.SecretName)
-		r.Hosts = append(r.Hosts, tls.Hosts...)
+		for _, h := range tls.Hosts {
+			if !slices.Contains(r.Hosts, h) {
+				r.Hosts = append(r.Hosts, h)
+			}
+		}
 	}
 	for _, rule := range ing.Spec.Rules {
 		rr := RuleResult{Host: rule.Host}
-		if !contains(r.Hosts, rule.Host) {
+		if !slices.Contains(r.Hosts, rule.Host) {
 			r.Hosts = append(r.Hosts, rule.Host)
 		}
 		if rule.HTTP != nil {
@@ -72,17 +78,14 @@ func analyzeOne(ing networkingv1.Ingress) IngressResult {
 				if p.PathType != nil {
 					pt = string(*p.PathType)
 				}
-				port := ""
+				svc, port := "", ""
 				if p.Backend.Service != nil {
+					svc = p.Backend.Service.Name
 					if p.Backend.Service.Port.Name != "" {
 						port = p.Backend.Service.Port.Name
 					} else {
 						port = fmt.Sprintf("%d", p.Backend.Service.Port.Number)
 					}
-				}
-				svc := ""
-				if p.Backend.Service != nil {
-					svc = p.Backend.Service.Name
 				}
 				rr.Paths = append(rr.Paths, PathResult{Path: p.Path, PathType: pt, BackendSvc: svc, BackendPort: port})
 			}
@@ -134,9 +137,20 @@ var annotationMap = []struct {
 	{"nginx.ingress.kubernetes.io/temporal-redirect", "HTTPRedirect in VirtualService", "Use redirectCode=302 in VirtualService HTTPRedirect", 1},
 }
 
+// annotationWeights maps annotation prefix to its scoring weight for O(1) lookup.
+var annotationWeights = func() map[string]int {
+	m := make(map[string]int, len(annotationMap))
+	for _, r := range annotationMap {
+		m[r.prefix] = r.weight
+	}
+	return m
+}()
+
 func parseAnnotations(anns map[string]string) ([]AnnotationNote, []string) {
 	var notes []AnnotationNote
 	var warnings []string
+
+	// Walk the ordered annotation map to preserve stable output order.
 	for _, rule := range annotationMap {
 		if val, ok := anns[rule.prefix]; ok {
 			notes = append(notes, AnnotationNote{
@@ -150,40 +164,33 @@ func parseAnnotations(anns map[string]string) ([]AnnotationNote, []string) {
 			}
 		}
 	}
-	for k := range anns {
-		if strings.HasPrefix(k, "nginx.ingress.kubernetes.io/") {
-			found := false
-			for _, rule := range annotationMap {
-				if rule.prefix == k {
-					found = true
-					break
-				}
-			}
-			if !found {
-				warnings = append(warnings, fmt.Sprintf("Unknown annotation %q — review manually.", k))
-				notes = append(notes, AnnotationNote{
-					Annotation:   k,
-					Value:        anns[k],
-					IstioEquiv:   "Unknown",
-					ManualAction: "Review this annotation manually — no mapping found.",
-				})
-			}
+
+	// Find nginx annotations not in the known map.
+	for k, v := range anns {
+		if !strings.HasPrefix(k, "nginx.ingress.kubernetes.io/") {
+			continue
+		}
+		if _, known := annotationWeights[k]; !known {
+			warnings = append(warnings, fmt.Sprintf("Unknown annotation %q — review manually.", k))
+			notes = append(notes, AnnotationNote{
+				Annotation:   k,
+				Value:        v,
+				IstioEquiv:   "Unknown",
+				ManualAction: "Review this annotation manually — no mapping found.",
+			})
 		}
 	}
+
+	sort.Strings(warnings)
 	return notes, warnings
 }
 
 func scoreComplexity(notes []AnnotationNote) Complexity {
 	score := 0
-	for _, rule := range annotationMap {
-		for _, n := range notes {
-			if n.Annotation == rule.prefix {
-				score += rule.weight
-			}
-		}
-	}
 	for _, n := range notes {
-		if n.IstioEquiv == "Unknown" {
+		if w, ok := annotationWeights[n.Annotation]; ok {
+			score += w
+		} else if n.IstioEquiv == "Unknown" {
 			score += 3
 		}
 	}
@@ -195,13 +202,4 @@ func scoreComplexity(notes []AnnotationNote) Complexity {
 	default:
 		return High
 	}
-}
-
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

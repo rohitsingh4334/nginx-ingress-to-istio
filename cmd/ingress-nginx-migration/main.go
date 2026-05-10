@@ -1,17 +1,34 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/urfave/cli/v2"
 
-	"github.com/rohitsingh4334/nginx-ingress-to-istio/internal/analyzer"
+	"github.com/rohitsingh4334/nginx-ingress-to-istio/internal/istio"
 	"github.com/rohitsingh4334/nginx-ingress-to-istio/internal/k8s"
 	"github.com/rohitsingh4334/nginx-ingress-to-istio/internal/report"
 )
 
 var version = "dev"
+
+var validLoadBalancers = map[string]bool{
+	"ROUND_ROBIN": true,
+	"LEAST_CONN":  true,
+	"RANDOM":      true,
+	"PASSTHROUGH": true,
+}
+
+var validTLSModes = map[string]bool{
+	"SIMPLE":      true,
+	"MUTUAL":      true,
+	"PASSTHROUGH": true,
+	"AUTO_PASSTHROUGH": true,
+	"ISTIO_MUTUAL": true,
+}
 
 func main() {
 	app := &cli.App{
@@ -36,7 +53,7 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:    "ingress-class",
-				Usage:   "Defines the name of the ingress class this controller satisfies.",
+				Usage:   "Defines the name of the ingress class this controller satisfies. Auto-detected from IngressClass resources if not set.",
 				EnvVars: []string{"INGRESS_CLASS"},
 			},
 			&cli.StringFlag{
@@ -55,6 +72,30 @@ func main() {
 				Usage:   "Watch for Ingress Class by Name together with Controller Class.",
 				EnvVars: []string{"INGRESS_CLASS_BY_NAME"},
 			},
+			&cli.StringFlag{
+				Name:    "connect-timeout",
+				Value:   "10s",
+				Usage:   "TCP connect timeout for generated DestinationRule trafficPolicy (e.g. 10s, 500ms).",
+				EnvVars: []string{"CONNECT_TIMEOUT"},
+			},
+			&cli.StringFlag{
+				Name:    "load-balancer",
+				Value:   "ROUND_ROBIN",
+				Usage:   "Load balancer algorithm for generated DestinationRule (ROUND_ROBIN, LEAST_CONN, RANDOM, PASSTHROUGH).",
+				EnvVars: []string{"LOAD_BALANCER"},
+			},
+			&cli.StringFlag{
+				Name:    "tls-mode",
+				Value:   "SIMPLE",
+				Usage:   "TLS mode for generated Gateway TLS block (SIMPLE, MUTUAL, PASSTHROUGH, AUTO_PASSTHROUGH, ISTIO_MUTUAL).",
+				EnvVars: []string{"TLS_MODE"},
+			},
+			&cli.StringFlag{
+				Name:    "cache-ttl",
+				Value:   "15s",
+				Usage:   "How long to cache the Ingress analysis results (0 disables caching).",
+				EnvVars: []string{"CACHE_TTL"},
+			},
 		},
 		Commands: []*cli.Command{
 			{
@@ -67,6 +108,23 @@ func main() {
 			},
 		},
 		Action: func(c *cli.Context) error {
+			// Validate --connect-timeout
+			if _, err := time.ParseDuration(c.String("connect-timeout")); err != nil {
+				return fmt.Errorf("invalid --connect-timeout %q: must be a valid duration (e.g. 10s, 500ms)", c.String("connect-timeout"))
+			}
+			// Validate --load-balancer
+			if !validLoadBalancers[c.String("load-balancer")] {
+				return fmt.Errorf("invalid --load-balancer %q: must be one of ROUND_ROBIN, LEAST_CONN, RANDOM, PASSTHROUGH", c.String("load-balancer"))
+			}
+			// Validate --tls-mode
+			if !validTLSModes[c.String("tls-mode")] {
+				return fmt.Errorf("invalid --tls-mode %q: must be one of SIMPLE, MUTUAL, PASSTHROUGH, AUTO_PASSTHROUGH, ISTIO_MUTUAL", c.String("tls-mode"))
+			}
+			cacheTTL, err := time.ParseDuration(c.String("cache-ttl"))
+			if err != nil {
+				return fmt.Errorf("invalid --cache-ttl %q: must be a valid duration (e.g. 15s, 1m)", c.String("cache-ttl"))
+			}
+
 			cfg := k8s.Config{
 				Kubeconfig:               c.String("kubeconfig"),
 				Namespaces:               c.StringSlice("namespaces"),
@@ -75,20 +133,16 @@ func main() {
 				WatchIngressWithoutClass: c.Bool("watch-ingress-without-class"),
 				IngressClassByName:       c.Bool("ingress-class-by-name"),
 			}
-
-			client, err := k8s.NewClient(cfg)
-			if err != nil {
-				return err
+			istioCfg := istio.Config{
+				ConnectTimeout: c.String("connect-timeout"),
+				LoadBalancer:   c.String("load-balancer"),
+				TLSMode:        c.String("tls-mode"),
 			}
 
-			ingresses, err := client.ListIngresses(c.Context)
+			srv, err := report.NewServer(c.String("addr"), cfg, istioCfg, cacheTTL)
 			if err != nil {
-				return err
+				return fmt.Errorf("initialising server: %w", err)
 			}
-
-			results := analyzer.Analyze(ingresses)
-
-			srv := report.NewServer(c.String("addr"), results)
 			log.Printf("Serving migration report at http://%s\n", c.String("addr"))
 			return srv.Serve()
 		},

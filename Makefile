@@ -23,8 +23,7 @@ lint:
 	golangci-lint run ./...
 
 e2e-test:
-	@if [ -z "$(ISTIO_IMAGE)" ]; then echo "❌  ISTIO_IMAGE is required."; exit 1; fi
-	ISTIO_IMAGE=$(ISTIO_IMAGE) E2E_REUSE_CLUSTER=$(E2E_REUSE_CLUSTER) \
+	E2E_TEST=true E2E_REUSE_CLUSTER=$(E2E_REUSE_CLUSTER) K3S_IMAGE=$(K3S_IMAGE) \
 	go test ./e2e/... -v -count=1 -timeout 10m
 
 install: build

@@ -1,0 +1,48 @@
+# Build output
+dist/
+*.exe
+
+# Go module vendoring
+vendor/
+
+# Delve / go debug binaries
+__debug_bin*
+
+# Generated test artifacts
+test-report.json
+
+# Temporary kubeconfig files written by e2e tests
+e2e-kubeconfig-*.yaml
+*.kubeconfig
+
+# Kubeconfig files (never commit cluster credentials)
+kubeconfig
+kubeconfig.yaml
+kubeconfig.yml
+*kubeconfig*.yaml
+*kubeconfig*.yml
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Go tool output
+*.test
+*.out
+coverage.html
+coverage.out
+*.prof
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
