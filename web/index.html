@@ -320,7 +320,7 @@
   <button class="btn btn-primary" type="button" onclick="downloadExcel()">&#8659; Download Excel</button>
   <button class="btn btn-outline" type="button" onclick="downloadPDF()">&#8659; Download PDF</button>
   <button class="btn btn-outline" type="button" onclick="downloadManifests()">&#8659; Download Manifests</button>
-  <button class="btn btn-outline" type="button" onclick="loadAll(true)">&#8635; Refresh</button>
+  <button class="btn btn-outline" type="button" onclick="loadAll()">&#8635; Refresh</button>
   <div class="toolbar-right">
     <label for="search" class="visually-hidden">Search ingresses</label>
     <input id="search" class="ctrl ctrl-search" type="search"
@@ -509,11 +509,10 @@ async function loadClusterInfo() {
 }
 
 /* ── Report ────────────────────────────────────────────────────────────── */
-async function loadReport(force) {
+async function loadReport() {
   const main = document.getElementById('main');
   try {
-    const url = force ? '/api/report?refresh=1' : '/api/report';
-    const res = await fetch(url);
+    const res = await fetch('/api/report');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     renderReport(data);
@@ -522,11 +521,11 @@ async function loadReport(force) {
   }
 }
 
-function loadAll(force) {
+function loadAll() {
   document.getElementById('ts').textContent = new Date().toLocaleString();
   document.getElementById('main').innerHTML = '<div class="empty">Loading report…</div>';
   loadClusterInfo();
-  loadReport(force);
+  loadReport();
 }
 
 /* ── Render ────────────────────────────────────────────────────────────── */
